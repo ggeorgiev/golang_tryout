@@ -1,0 +1,9 @@
+package pack
+
+func Export() int32 {
+	if 1 == 1 {
+		return 1
+	}
+
+	return 0
+}
