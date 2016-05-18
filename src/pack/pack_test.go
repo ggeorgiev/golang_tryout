@@ -3,6 +3,8 @@ package pack_test
 import (
 	"pack"
 	"testing"
+	"os"
+	"log"
 )
 
 func TestExport(t *testing.T) {
@@ -11,7 +13,8 @@ func TestExport(t *testing.T) {
 	}
 }
 func TestExport2(t *testing.T) {
-	if pack.Export() == 0 {
-
+	_, err := os.Open("filename.ext")
+	if err != nil {
+		log.Fatal(err)
 	}
 }
