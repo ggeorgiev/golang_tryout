@@ -118,18 +118,55 @@ func TestDynamicPool_Failing(t *testing.T) {
 	pool := &connection.DynamicPool{}
 	pool.InitPool(10, time.Millisecond * 10, time.Millisecond, OpenDummyConnection)
 
+	// Give it some time for the initial attempt to fail
+	time.Sleep(time.Millisecond * 2)
+
 	_, err := pool.GetConnection()
 	if err == nil {
 		t.Error("pool did not return error even every open connection fails")
 	}
 
 	go func() {
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(time.Millisecond * 3)
 		dummyId = 0
 	}()
 
 	_, err = pool.GetConnection()
 	if err != nil {
 		t.Error("pool get connection did not recovere after failier")
+	}
+}
+
+func TestDynamicPool_CloseUnused(t *testing.T) {
+	dummyId = 0
+
+	pool := &connection.DynamicPool{}
+	pool.InitPool(10, time.Millisecond, time.Millisecond, OpenDummyConnection)
+
+	func() {
+		for i := 0; i < 3; i++ {
+			connectionInterface, _ := pool.GetConnection()
+			connection := connectionInterface.(*DummyConnection)
+			defer pool.ReleaseConnection(connection)
+		}
+	}()
+
+	time.Sleep(time.Millisecond * 5);
+	if pool.CirculationConnectionCount() > 0 {
+		t.Error("the pool still have connection")
+	}
+
+	// check the same thing twice to make sure it will recover well
+	func() {
+		for i := 0; i < 3; i++ {
+			connectionInterface, _ := pool.GetConnection()
+			connection := connectionInterface.(*DummyConnection)
+			defer pool.ReleaseConnection(connection)
+		}
+	}()
+
+	time.Sleep(time.Millisecond * 5);
+	if pool.CirculationConnectionCount() > 0 {
+		t.Error("the pool still have connection")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"time"
+	"sync"
 )
 
 type ThrowAwayConnection interface {
@@ -34,6 +35,10 @@ type DynamicPool struct {
 
 	// Implementation detail, active waiters
 	waiters       int32
+
+	// Implementation detail, ticker that will free unused connections
+	tickerMutex   sync.Mutex
+	ticker        *time.Ticker
 }
 
 func (pool *DynamicPool) connect() {
@@ -53,6 +58,29 @@ func (pool *DynamicPool) connect() {
 		connection, err := pool.connectFn()
 		if err == nil {
 			pool.channel <- connection
+
+			pool.tickerMutex.Lock()
+
+			if pool.ticker == nil {
+				pool.ticker = time.NewTicker(pool.timeout)
+
+				go func() {
+					for range pool.ticker.C {
+						select {
+						case <-pool.channel:
+							if atomic.AddInt32(&pool.size, -1) == 0 {
+								pool.tickerMutex.Lock()
+								pool.ticker.Stop()
+								pool.ticker = nil
+								pool.tickerMutex.Unlock()
+								break; // this breaks the for loop
+							}
+						case <-time.After(time.Millisecond):
+						}
+					}
+				}()
+			}
+			pool.tickerMutex.Unlock()
 			return
 		}
 		// if there is no active waiter, abandon the request
@@ -77,6 +105,10 @@ func (pool *DynamicPool) InitPool(max int32, timeout time.Duration, retryInterva
 	pool.timeout = timeout
 	pool.retryInterval = retryInterval
 	pool.channel = make(chan interface{}, max)
+
+	pool.tickerMutex = sync.Mutex{}
+	pool.ticker = nil
+
 	go pool.connect()
 	return
 }
