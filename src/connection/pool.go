@@ -41,6 +41,22 @@ type DynamicPool struct {
 	ticker        *time.Ticker
 }
 
+func (pool *DynamicPool) tick() {
+	for range pool.ticker.C {
+		select {
+		case <-pool.channel:
+			if atomic.AddInt32(&pool.size, -1) == 0 {
+				pool.tickerMutex.Lock()
+				pool.ticker.Stop()
+				pool.ticker = nil
+				pool.tickerMutex.Unlock()
+				break; // this breaks the for loop
+			}
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 func (pool *DynamicPool) connect() {
 
 	// Note that we would like to query a new connection even if there is one available
@@ -60,25 +76,9 @@ func (pool *DynamicPool) connect() {
 			pool.channel <- connection
 
 			pool.tickerMutex.Lock()
-
 			if pool.ticker == nil {
 				pool.ticker = time.NewTicker(pool.timeout)
-
-				go func() {
-					for range pool.ticker.C {
-						select {
-						case <-pool.channel:
-							if atomic.AddInt32(&pool.size, -1) == 0 {
-								pool.tickerMutex.Lock()
-								pool.ticker.Stop()
-								pool.ticker = nil
-								pool.tickerMutex.Unlock()
-								break; // this breaks the for loop
-							}
-						case <-time.After(time.Millisecond):
-						}
-					}
-				}()
+				go pool.tick()
 			}
 			pool.tickerMutex.Unlock()
 			return
