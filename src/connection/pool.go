@@ -15,20 +15,25 @@ type ConnectFunction func() (interface{}, error)
 
 type DynamicPool struct {
 	// Maximum open connections
-	max int32
+	max           int32
 
-	// Timeout period for waiting for a connection when the
-	// maximum is exhausted
-	timeout time.Duration
+	// Timeout period for waiting for a connection when the maximum is exhausted
+	timeout       time.Duration
+
+	// Time interval between connect retries
+	retryInterval time.Duration
 
 	// Function that can open a new connection when needed
-	connectFn ConnectFunction
+	connectFn     ConnectFunction
 
 	// Implementation detail, buffered channel that keeps the available connections
-	channel chan interface{}
+	channel       chan interface{}
 
 	// Implementation detail, the current number of connection in circulation
-	size int32
+	size          int32
+
+	// Implementation detail, active waiters
+	waiters       int32
 }
 
 func (pool *DynamicPool) connect() {
@@ -43,23 +48,34 @@ func (pool *DynamicPool) connect() {
 	}
 
 	atomic.AddInt32(&pool.size, 1)
-	connection, err := pool.connectFn()
-	if err != nil {
-		atomic.AddInt32(&pool.size, -1)
-		return
+
+	for {
+		connection, err := pool.connectFn()
+		if err == nil {
+			pool.channel <- connection
+			return
+		}
+		// if there is no active waiter, abandon the request
+		if pool.waiters == 0 {
+			break
+		}
+
+		time.Sleep(pool.retryInterval)
 	}
 
-	pool.channel <- connection
+	atomic.AddInt32(&pool.size, -1)
 }
 
 // InitPool initializes the Dynamic pool.
 // Makes a channel and triggers creation of the first connection.
-func (pool *DynamicPool) InitPool(max int32, timeout time.Duration, connectFn ConnectFunction) {
+func (pool *DynamicPool) InitPool(max int32, timeout time.Duration, retryInterval time.Duration, connectFn ConnectFunction) {
 
 	pool.max = max
 	pool.size = 0
+	pool.waiters = 0
 	pool.connectFn = connectFn
 	pool.timeout = timeout
+	pool.retryInterval = retryInterval
 	pool.channel = make(chan interface{}, max)
 	go pool.connect()
 	return
@@ -67,6 +83,9 @@ func (pool *DynamicPool) InitPool(max int32, timeout time.Duration, connectFn Co
 
 func (pool *DynamicPool) GetConnection() (interface{}, error) {
 	go pool.connect()
+
+	atomic.AddInt32(&pool.waiters, 1)
+	defer atomic.AddInt32(&pool.waiters, -1)
 
 	select {
 	case connection := <-pool.channel:

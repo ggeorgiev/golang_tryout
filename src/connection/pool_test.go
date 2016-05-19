@@ -4,6 +4,7 @@ import (
 	"connection"
 	"testing"
 	"time"
+	"errors"
 )
 
 type DummyConnection struct {
@@ -11,16 +12,21 @@ type DummyConnection struct {
 }
 
 func (connection DummyConnection) Unusable() bool {
-	return connection.id == 10
+	return connection.id >= 10
 }
 
+var dummyId int = 0
+
 func OpenDummyConnection() (interface{}, error) {
-	return &DummyConnection{}, nil
+	if dummyId < 0 {
+		return nil, errors.New("negative dummyId")
+	}
+	return &DummyConnection{dummyId}, nil
 }
 
 func TestDynamicPool_ReuseConnection(t *testing.T) {
 	pool := &connection.DynamicPool{}
-	pool.InitPool(10, time.Second*10, OpenDummyConnection)
+	pool.InitPool(10, time.Second, time.Second, OpenDummyConnection)
 
 	func() {
 		connectionInterface, _ := pool.GetConnection()
@@ -41,7 +47,7 @@ func TestDynamicPool_ReuseConnection(t *testing.T) {
 
 func TestDynamicPool_DoNotMakeNewConnections(t *testing.T) {
 	pool := &connection.DynamicPool{}
-	pool.InitPool(10, time.Millisecond*10, OpenDummyConnection)
+	pool.InitPool(10, time.Millisecond * 10, time.Second, OpenDummyConnection)
 
 	// check with arbitrary number of attempts if we create new connection
 	for i := 0; i < 10; i++ {
@@ -63,7 +69,7 @@ func TestDynamicPool_DoNotMakeNewConnections(t *testing.T) {
 
 func TestDynamicPool_UseAllConnections(t *testing.T) {
 	pool := &connection.DynamicPool{}
-	pool.InitPool(10, time.Millisecond*10, OpenDummyConnection)
+	pool.InitPool(10, time.Millisecond * 10, time.Second, OpenDummyConnection)
 
 	var connections [10]*DummyConnection
 
@@ -84,7 +90,7 @@ func TestDynamicPool_UseAllConnections(t *testing.T) {
 
 func TestDynamicPool_Unusable(t *testing.T) {
 	pool := &connection.DynamicPool{}
-	pool.InitPool(10, time.Millisecond*10, OpenDummyConnection)
+	pool.InitPool(10, time.Millisecond * 10, time.Second, OpenDummyConnection)
 
 	func() {
 		connectionInterface, _ := pool.GetConnection()
@@ -101,7 +107,29 @@ func TestDynamicPool_Unusable(t *testing.T) {
 		}
 		current := currentInterface.(*DummyConnection)
 		if current.Unusable() {
-			t.Error("we reseaved unusable connection.")
+			t.Error("recieved unusable connection.")
 		}
+	}
+}
+
+func TestDynamicPool_Failing(t *testing.T) {
+	dummyId = -1
+
+	pool := &connection.DynamicPool{}
+	pool.InitPool(10, time.Millisecond * 10, time.Millisecond, OpenDummyConnection)
+
+	_, err := pool.GetConnection()
+	if err == nil {
+		t.Error("pool did not return error even every open connection fails")
+	}
+
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		dummyId = 0
+	}()
+
+	_, err = pool.GetConnection()
+	if err != nil {
+		t.Error("pool get connection did not recovere after failier")
 	}
 }
